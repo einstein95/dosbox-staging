@@ -1,7 +1,8 @@
 /*
  *  SPDX-License-Identifier: GPL-2.0-or-later
  *
- *  Copyright (C) 2022-2024  The DOSBox Staging Team
+ *  Copyright (C) 2020-2024  The DOSBox Staging Team
+ *  Copyright (C) 2002-2021  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -18,33 +19,17 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
-#ifndef DOSBOX_PCSPEAKER_H
-#define DOSBOX_PCSPEAKER_H
-
-#include "dosbox.h"
-
-#include <string_view>
+#ifndef REELMAGIC_PLAYER_H
+#define REELMAGIC_PLAYER_H
 
 #include "mixer.h"
 #include "rwqueue.h"
-#include "timer.h"
 
-class PcSpeaker {
-public:
-	RWQueue<float> output_queue{1};
+struct ReelMagicAudio {
 	MixerChannelPtr channel = nullptr;
-	float frame_counter = 0.0f;
-
-	virtual ~PcSpeaker() = default;
-
-	virtual void SetFilterState(const FilterState filter_state) = 0;
-	virtual bool TryParseAndSetCustomFilter(const std::string& filter_choice) = 0;
-	virtual void SetCounter(const int cntr, const PitMode pit_mode) = 0;
-	virtual void SetPITControl(const PitMode pit_mode)              = 0;
-	virtual void SetType(const PpiPortB &port_b)                    = 0;
-	virtual void PicCallback(const int requested_frames)            = 0;
+	RWQueue<AudioFrame> output_queue{1};
 };
 
-extern std::unique_ptr<PcSpeaker> pc_speaker;
+extern ReelMagicAudio reel_magic_audio;
 
 #endif
