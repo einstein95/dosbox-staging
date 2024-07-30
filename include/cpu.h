@@ -55,12 +55,12 @@ enum class ArchitectureType {
 };
 
 // Current cycles values
-extern int CPU_Cycles;
-extern int CPU_CycleLeft;
+extern std::atomic<int> CPU_Cycles;
+extern std::atomic<int> CPU_CycleLeft;
 
 // Cycles settings for both "legacy" and "modern" modes
 extern bool CPU_CycleAutoAdjust;
-extern int CPU_CycleMax;
+extern std::atomic<int> CPU_CycleMax;
 extern int CPU_CyclePercUsed;
 extern int CPU_CycleLimit;
 
