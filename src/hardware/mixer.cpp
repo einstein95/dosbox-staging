@@ -32,7 +32,6 @@
 #include <SDL.h>
 #include <speex/speex_resampler.h>
 
-#include "audio_vector.h"
 #include "../capture/capture.h"
 #include "channel_names.h"
 #include "checks.h"
@@ -220,7 +219,7 @@ struct MixerSettings {
 
 static struct MixerSettings mixer = {};
 
-extern RWQueue<std::unique_ptr<AudioVector>> soundblaster_mixer_queue;
+extern RWQueue<AudioFrame> soundblaster_mixer_queue;
 
 [[maybe_unused]] static const char* to_string(const ResampleMethod m)
 {
@@ -1648,8 +1647,6 @@ static constexpr int16_t u8to16(const int u_val)
 // 8-bit to 16-bit lookup tables
 int16_t lut_u8to16[UINT8_MAX + 1] = {};
 
-static constexpr int16_t* lut_s8to16 = lut_u8to16 + 128;
-
 static constexpr void fill_8to16_lut()
 {
 	for (int i = 0; i <= UINT8_MAX; ++i) {
@@ -2168,82 +2165,9 @@ void MixerChannel::AddSamples(const int num_frames, const Type* data)
 		}
 	}
 }
-
-// TODO Move this into the Sound Blaster code.
-// This is only called in the "Direct DAC" (non-DMA) operational mode of the
-// Sound Blaster where the DAC is controlled by the CPU.
-//
-void MixerChannel::AddStretched(const int len, int16_t* data)
-{
-	assert(len >= 0);
-
-	std::lock_guard lock(mutex);
-
-	// Stretch mono input stream into a tick's worth of frames
-	static float frame_counter = 0.0f;
-	frame_counter += get_mixer_frames_per_tick();
-	int frames_remaining = ifloor(frame_counter);
-	frame_counter -= static_cast<float>(frames_remaining);
-	assert(frames_remaining >= 0);
-
-	// Used for time-stretching the audio
-	float pos = 0;
-	float step = static_cast<float>(len) / static_cast<float>(frames_remaining);
-
-	const auto mapped_output_left  = output_map.left;
-	const auto mapped_output_right = output_map.right;
-
-	while (frames_remaining--) {
-		auto prev_sample = prev_frame.left;
-		auto curr_sample = static_cast<float>(*data);
-		float out_sample = 0;
-
-		switch (resample_method) {
-		case ResampleMethod::LerpUpsampleOrResample:
-		case ResampleMethod::Resample:
-			out_sample = lerp(prev_sample, curr_sample, pos);
-			break;
-
-		case ResampleMethod::ZeroOrderHoldAndResample:
-			out_sample = curr_sample;
-		}
-
-		auto frame_with_gain = AudioFrame{out_sample} * combined_volume_gain;
-
-		AudioFrame out_frame           = {};
-		out_frame[mapped_output_left]  = frame_with_gain.left;
-		out_frame[mapped_output_right] = frame_with_gain.right;
-
-		audio_frames.push_back(out_frame);
-
-		// Advance input position
-		pos += step;
-		if (pos > 1.0f) {
-			pos -= 1.0f;
-			prev_frame = {curr_sample};
-			++data;
-		}
-	}
-}
-
 void MixerChannel::AddSamples_m8(const int num_frames, const uint8_t* data)
 {
 	AddSamples<uint8_t, false, false, true>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_s8(const int num_frames, const uint8_t* data)
-{
-	AddSamples<uint8_t, true, false, true>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_m8s(const int num_frames, const int8_t* data)
-{
-	AddSamples<int8_t, false, true, true>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_s8s(const int num_frames, const int8_t* data)
-{
-	AddSamples<int8_t, true, true, true>(num_frames, data);
 }
 
 void MixerChannel::AddSamples_m16(const int num_frames, const int16_t* data)
@@ -2254,16 +2178,6 @@ void MixerChannel::AddSamples_m16(const int num_frames, const int16_t* data)
 void MixerChannel::AddSamples_s16(const int num_frames, const int16_t* data)
 {
 	AddSamples<int16_t, true, true, true>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_m16u(const int num_frames, const uint16_t* data)
-{
-	AddSamples<uint16_t, false, false, true>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_s16u(const int num_frames, const uint16_t* data)
-{
-	AddSamples<uint16_t, true, false, true>(num_frames, data);
 }
 
 void MixerChannel::AddSamples_mfloat(const int num_frames, const float* data)
@@ -2284,16 +2198,6 @@ void MixerChannel::AddSamples_m16_nonnative(const int num_frames, const int16_t*
 void MixerChannel::AddSamples_s16_nonnative(const int num_frames, const int16_t* data)
 {
 	AddSamples<int16_t, true, true, false>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_m16u_nonnative(const int num_frames, const uint16_t* data)
-{
-	AddSamples<uint16_t, false, false, false>(num_frames, data);
-}
-
-void MixerChannel::AddSamples_s16u_nonnative(const int num_frames, const uint16_t* data)
-{
-	AddSamples<uint16_t, true, false, false>(num_frames, data);
 }
 
 std::string MixerChannel::DescribeLineout() const

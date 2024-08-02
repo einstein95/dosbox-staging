@@ -56,6 +56,7 @@ static constexpr int MixerBufferMask     = MixerBufferByteSize - 1;
 
 // TODO This seems like is a general-purpose lookup, consider moving it
 extern int16_t lut_u8to16[UINT8_MAX + 1];
+static constexpr int16_t* lut_s8to16 = lut_u8to16 + 128;
 
 constexpr auto Max16BitSampleValue = INT16_MAX;
 constexpr auto Min16BitSampleValue = INT16_MIN;
@@ -244,21 +245,12 @@ public:
 	void AddSamples(const int num_frames, const Type* data);
 
 	void AddSamples_m8(const int num_frames, const uint8_t* data);
-	void AddSamples_s8(const int num_frames, const uint8_t* data);
-	void AddSamples_m8s(const int num_frames, const int8_t* data);
-	void AddSamples_s8s(const int num_frames, const int8_t* data);
 	void AddSamples_m16(const int num_frames, const int16_t* data);
 	void AddSamples_s16(const int num_frames, const int16_t* data);
-	void AddSamples_m16u(const int num_frames, const uint16_t* data);
-	void AddSamples_s16u(const int num_frames, const uint16_t* data);
 	void AddSamples_mfloat(const int num_frames, const float* data);
 	void AddSamples_sfloat(const int num_frames, const float* data);
 	void AddSamples_m16_nonnative(const int num_frames, const int16_t* data);
 	void AddSamples_s16_nonnative(const int num_frames, const int16_t* data);
-	void AddSamples_m16u_nonnative(const int num_frames, const uint16_t* data);
-	void AddSamples_s16u_nonnative(const int num_frames, const uint16_t* data);
-
-	void AddStretched(const int num_frames, int16_t* data);
 
 	void Enable(const bool should_enable);
 

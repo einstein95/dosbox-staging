@@ -26,7 +26,6 @@
 #include <string>
 #include <tuple>
 
-#include "audio_vector.h"
 #include "autoexec.h"
 #include "bios.h"
 #include "bit_view.h"
@@ -187,6 +186,7 @@ struct SbInfo {
 
 		// Index of current entry
 		int16_t last = 0;
+		ResampleMethod resample_method = {};
 	} dac = {};
 
 	struct {
@@ -309,7 +309,9 @@ static int e2_incr_table[4][9] = {
 };
 
 static int frames_added_this_tick = 0;
-RWQueue<std::unique_ptr<AudioVector>> soundblaster_mixer_queue{128};
+
+// 128 millisecond queue of at up to 48 frames per millisecond
+RWQueue<AudioFrame> soundblaster_mixer_queue{48 * 128};
 
 static const char* sb_log_prefix()
 {
@@ -903,10 +905,95 @@ static uint32_t read_dma_16bit(const uint32_t bytes_to_read, const uint32_t i = 
 	return check_cast<uint32_t>(bytes_read);
 }
 
-static void enqueue_frames(std::unique_ptr<AudioVector> frames)
+// Converts DOS-origin samples to floats. DOS-origin samples come directly from
+// the DOS program via DMA or other little endian media source. Currently the
+// resulting float values are scaled to the 16-bit signed range for the closest
+// compatibliity with the mixer, but long-term this will be changed to the
+// (-1.0f to 1.0f) range.
+//
+template <typename T>
+static constexpr float dos_sample_to_float(const T sample)
 {
-	frames_added_this_tick += frames->num_frames;
-	soundblaster_mixer_queue.NonblockingEnqueue(std::move(frames));
+	if constexpr (std::is_same_v<T, uint8_t>) {
+		return lut_u8to16[sample];
+	} else if constexpr (std::is_same_v<T, int8_t>) {
+		return lut_s8to16[sample];
+	} else if constexpr (std::is_same_v<T, uint16_t>) {
+		constexpr auto ZeroVolume = 32768;
+		return static_cast<int16_t>((le16_to_host(sample) - ZeroVolume));
+	} else if constexpr (std::is_same_v<T, int16_t>) {
+		return static_cast<int16_t>(
+		        le16_to_host(static_cast<uint16_t>(sample)));
+	}
+	assertm(false, "SB: Unhandled sample data type (8 & 16-bit ints only)");
+	return 0.0f;
+}
+
+template <typename T>
+static void enqueue_frames(const T* samples, const size_t num_frames,
+                           const bool is_mono = false)
+{
+	// A long-lived vector that holds the convered audio frames
+	static std::vector<AudioFrame> frames = {};
+	frames.reserve(num_frames);
+
+	// the pointer is walked forward through the loop
+	auto s_ptr = samples;
+
+	auto frames_remaining = num_frames;
+
+	while (frames_remaining--) {
+		const auto left = dos_sample_to_float(*s_ptr++);
+		const auto right = is_mono ? left : dos_sample_to_float(*s_ptr++);
+		frames.emplace_back(left, right);
+	}
+	soundblaster_mixer_queue.NonblockingBulkEnqueue(frames, num_frames);
+	frames_added_this_tick += check_cast<int>(num_frames);
+}
+
+static void stretch_and_enqueue_frames(const int16_t* data, const int len)
+{
+	assert(len >= 0);
+
+	// Stretch mono input stream into a tick's worth of frames
+	static float frame_counter = 0.0f;
+	frame_counter += static_cast<float>(sb.chan->GetSampleRate()) / 1000.0f;
+	int frames_remaining = ifloor(frame_counter);
+	frame_counter -= static_cast<float>(frames_remaining);
+	assert(frames_remaining >= 0);
+
+	// Used for time-stretching the audio
+	float pos = 0;
+	float step = static_cast<float>(len) / static_cast<float>(frames_remaining);
+
+	static auto prev_sample = static_cast<float>(*data);
+	auto curr_sample        = static_cast<float>(*data);
+
+	while (frames_remaining--) {
+		float out_sample = 0;
+
+		switch (sb.dac.resample_method) {
+		case ResampleMethod::LerpUpsampleOrResample:
+		case ResampleMethod::Resample:
+			out_sample = lerp(prev_sample, curr_sample, pos);
+			break;
+		case ResampleMethod::ZeroOrderHoldAndResample:
+			out_sample = curr_sample;
+			break;
+		}
+
+		soundblaster_mixer_queue.NonblockingEnqueue({out_sample, out_sample});
+		++frames_added_this_tick;
+
+		// Advance input position
+		pos += step;
+		if (pos > 1.0f) {
+			pos -= 1.0f;
+			prev_sample = curr_sample;
+			++data;
+		}
+	}
+	prev_sample = curr_sample;
 }
 
 static void play_dma_transfer(const uint32_t bytes_requested)
@@ -959,8 +1046,10 @@ static void play_dma_transfer(const uint32_t bytes_requested)
 			constexpr auto NumDecoded = check_cast<uint8_t>(
 			        decoded.size());
 
-			enqueue_frames(std::make_unique<AudioVectorM8>(
-				NumDecoded, maybe_silence(NumDecoded, decoded.data())));
+			constexpr auto IsMono = true;
+			enqueue_frames(maybe_silence(NumDecoded, decoded.data()),
+			               NumDecoded,
+			               IsMono);
 			num_samples += NumDecoded;
 			i++;
 		}
@@ -998,11 +1087,13 @@ static void play_dma_transfer(const uint32_t bytes_requested)
 			if (frames) {
 				if (sb.dma.sign) {
 					const auto signed_buf = reinterpret_cast<int8_t*>(sb.dma.buf.b8);
-					enqueue_frames(std::make_unique<AudioVectorS8S>(
-						frames, maybe_silence(samples, signed_buf)));
+					enqueue_frames(maybe_silence(samples,
+					                             signed_buf),
+					               frames);
 				} else {
-					enqueue_frames(std::make_unique<AudioVectorS8>(
-						frames, maybe_silence(samples, sb.dma.buf.b8)));
+					enqueue_frames(maybe_silence(samples,
+					                             sb.dma.buf.b8),
+					               frames);
 				}
 			}
 			// Otherwise there's an unhandled dangling sample from
@@ -1020,13 +1111,17 @@ static void play_dma_transfer(const uint32_t bytes_requested)
 			frames     = check_cast<uint16_t>(samples / channels);
 			assert(channels == 1 && frames == samples); // sanity-check
 			                                            // mono
+
+			constexpr auto IsMono = true;
 			if (sb.dma.sign) {
 				const auto signed_buf = reinterpret_cast<int8_t*>(sb.dma.buf.b8);
-				enqueue_frames(std::make_unique<AudioVectorM8S>(
-					frames, maybe_silence(samples, signed_buf)));
+				enqueue_frames(maybe_silence(samples, signed_buf),
+				               frames,
+				               IsMono);
 			} else {
-				enqueue_frames(std::make_unique<AudioVectorM8>(
-					frames, maybe_silence(samples, sb.dma.buf.b8)));
+				enqueue_frames(maybe_silence(samples, sb.dma.buf.b8),
+				               frames,
+				               IsMono);
 			}
 		}
 		break;
@@ -1045,12 +1140,14 @@ static void play_dma_transfer(const uint32_t bytes_requested)
 			// Only add whole frames when in stereo DMA mode
 			if (frames) {
 				if (sb.dma.sign) {
-					enqueue_frames(std::make_unique<AudioVectorS16>(
-						frames, maybe_silence(samples, sb.dma.buf.b16)));
+					enqueue_frames(maybe_silence(samples,
+					                             sb.dma.buf.b16),
+					               frames);
 				} else {
 					const auto unsigned_buf = reinterpret_cast<uint16_t*>(sb.dma.buf.b16);
-					enqueue_frames(std::make_unique<AudioVectorS16U>(
-						frames, maybe_silence(samples, unsigned_buf)));
+					enqueue_frames(maybe_silence(samples,
+					                             unsigned_buf),
+					               frames);
 				}
 			}
 			if (samples & 1) {
@@ -1068,13 +1165,16 @@ static void play_dma_transfer(const uint32_t bytes_requested)
 			frames     = check_cast<uint16_t>(samples / channels);
 			assert(channels == 1 && frames == samples); // sanity-check
 			                                            // mono
+			constexpr auto IsMono = true;
 			if (sb.dma.sign) {
-				enqueue_frames(std::make_unique<AudioVectorM16>(
-					frames, maybe_silence(samples, sb.dma.buf.b16)));
+				enqueue_frames(maybe_silence(samples, sb.dma.buf.b16),
+				               frames,
+				               IsMono);
 			} else {
 				const auto unsigned_buf = reinterpret_cast<uint16_t*>(sb.dma.buf.b16);
-				enqueue_frames(std::make_unique<AudioVectorM16U>(
-					frames, maybe_silence(samples, unsigned_buf)));
+				enqueue_frames(maybe_silence(samples, unsigned_buf),
+				               frames,
+				               IsMono);
 			}
 		}
 		break;
@@ -2857,21 +2957,31 @@ static void sblaster_mixer_callback([[maybe_unused]]const int requested_frames)
 	// We must not block in fast-forward mode or the timings used by the mixer get confused
 	if (MIXER_InFastForwardMode() && soundblaster_mixer_queue.IsEmpty()) {
 		sb.chan->AddSilence();
-		return;
+	} else {
+		static std::vector<AudioFrame> frames = {};
+
+		const auto num_dequeued = soundblaster_mixer_queue.BulkDequeue(
+		        frames, requested_frames);
+
+		// Add what we got, even if we didn't dequeue in full
+		if (num_dequeued) {
+			LOG_INFO("SOUNDBLASTER: Enqueuing sound");
+			sb.chan->AddSamples_sfloat(static_cast<int>(frames.size()),
+			                           &frames.front()[0]);
+		}
+		// Pad with silence if we came up short
+		if (num_dequeued < check_cast<size_t>(requested_frames)) {
+			// Queue must be stopped, otherwise Dequeue() will block until some frames are available
+			LOG_ERR("SOUNDBLASTER: Enqueing silence (input queue is stopped)");
+			sb.chan->AddSilence();
+		}
 	}
-	const auto frames = soundblaster_mixer_queue.Dequeue();
-	if (!frames) {
-		// Queue must be stopped, otherwise Dequeue() will block until some frames are available
-		sb.chan->AddSilence();
-		return;
-	}
-	// Weird double de-referencing syntax as the object type is std::optional<std::unique_ptr<AudioVector>>
-	(*frames)->AddSamples(sb.chan.get());
 }
 
 static void generate_frames(const int frames_requested)
 {
 	static int ticks_of_silence = 0;
+	constexpr auto IsMono       = true;
 
 	switch (sb.mode) {
 	case DspMode::None:
@@ -2886,10 +2996,9 @@ static void generate_frames(const int frames_requested)
 	// Enqueue a tick's worth of silenced frames
 	// Some games (Tyrian for example) will switch to DmaMasked briefly (less than 5 ticks usually)
 	// We can't use AddSilence on the mixer thread as that asks for a blocksize of audio (usually over 10ms)
-	enqueue_frames(std::make_unique<AudioVectorM8S>(
-		frames_requested,
-		std::vector<int8_t>(frames_requested).data()
-	));
+	enqueue_frames(std::vector<int8_t>(frames_requested).data(),
+		       frames_requested,
+		       IsMono);
 
 	++ticks_of_silence;
 	if (ticks_of_silence > 5000) {
@@ -2915,11 +3024,8 @@ static void generate_frames(const int frames_requested)
 	ticks_of_silence = 0;
 
 	if (sb.dac.used > 0) {
-		enqueue_frames(std::make_unique<AudioVectorStretched>(sb.dac.used, sb.dac.data));
-		// Reverse the addition done by enqueue_frames()
-		// This works everywhere but here because of stretched frames
-		frames_added_this_tick -= sb.dac.used;
-		frames_added_this_tick += frames_requested;
+		stretch_and_enqueue_frames(sb.dac.data, sb.dac.used);
+
 		sb.dac.used = 0;
 	} else {
 		sb.mode = DspMode::None;
