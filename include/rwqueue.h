@@ -39,6 +39,16 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+
+// Clang 15 for macOS 12 and 13 is missing C++17's <memory_resource>, however
+// Clang 15 for macOS 14 has it. When the build system eventually uses macOS 14
+// for all Apple builds then the '#else' portions can be removed. In the
+// meantime we simply fallback to the non-pooled deque for these systems.
+//
+#ifdef HAVE_MEMORY_RESOURCE
+	#include <memory_resource>
+#endif
+
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -46,7 +56,12 @@
 template <typename T>
 class RWQueue {
 private:
-	std::deque<T> queue{}; // faster than: vector, queue, and list
+#ifdef HAVE_MEMORY_RESOURCE
+	std::pmr::unsynchronized_pool_resource pool = {};
+	std::pmr::deque<T> queue; // faster than: vector, queue, and list
+#else
+	std::deque<T> queue = {}; // faster than: vector, queue, and list
+#endif
 	std::mutex mutex                  = {};
 	std::condition_variable has_room  = {};
 	std::condition_variable has_items = {};
