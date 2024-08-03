@@ -223,42 +223,6 @@ int Tag::ansi_num() const
 	return 0;
 }
 
-/*
- * Regular expression to match tags
- *
- * The following is an example with group numbers:
- *               _____2_____
- *               |		   |
- * This color is [color=light-red] red
- *                |_4_| |6|
- *                |_5_|
- *
- * The folowing is a closing tag example:
- * _____2____
- * |		|
- * [/inverse]
- *  ||     |
- *  3|__4__|
- */
-static std::regex markup(R"((\\)?)" // Escape tag? (1)
-                         "(\\["     // Opening bracket, open main group (2)
-                         "[ \\t]*?" // Optional spacing after opening bracket
-                         "(\\/)?"   // Check for closing tag (3)
-                         "("        // Start group of tags (4)
-                         // Select tags which require a value (5)
-                         "(color|bgcolor|erasel|erases)"
-                         // Color or erase value. '=' not captured in separate
-                         // group. Spacing around '=' is allowed (6)
-                         "(?:[ \\t]*?=[ \\t]*?([a-z\\-]+))?"
-                         // All other tags to match
-                         "|i|b|u|s|blink|dim|hidden|inverse|reset"
-                         ")"        // End group of tags (4)
-                         "[ \\t]*?" // Optional spacing before closing bracket
-                         "\\])" // Closing bracket. Note: Clang and MSVC requires
-                                // this to be escaped. Closing main group (2)
-                         ,
-                         std::regex::icase);
-
 static char ansi_code[10] = {};
 
 /*!
@@ -337,6 +301,47 @@ std::string convert_ansi_markup(const std::string &str)
  */
 std::string convert_ansi_markup(const char *str)
 {
+
+	/*
+	 * Regular expression to match tags
+	 *
+	 * The following is an example with group numbers:
+	 *               _____2_____
+	 *               |		   |
+	 * This color is [color=light-red] red
+	 *                |_4_| |6|
+	 *                |_5_|
+	 *
+	 * The folowing is a closing tag example:
+	 * _____2____
+	 * |		|
+	 * [/inverse]
+	 *  ||     |
+	 *  3|__4__|
+	 */
+	static std::regex markup(R"((\\)?)" // Escape tag? (1)
+	                         "(\\[" // Opening bracket, open main group (2)
+	                         "[ \\t]*?" // Optional spacing after opening
+	                                    // bracket
+	                         "(\\/)?"   // Check for closing tag (3)
+	                         "("        // Start group of tags (4)
+	                         // Select tags which require a value (5)
+	                         "(color|bgcolor|erasel|erases)"
+	                         // Color or erase value. '=' not captured in
+	                         // separate group. Spacing around '=' is
+	                         // allowed (6)
+	                         "(?:[ \\t]*?=[ \\t]*?([a-z\\-]+))?"
+	                         // All other tags to match
+	                         "|i|b|u|s|blink|dim|hidden|inverse|reset"
+	                         ")"        // End group of tags (4)
+	                         "[ \\t]*?" // Optional spacing before closing
+	                                    // bracket
+	                         "\\])" // Closing bracket. Note: Clang and MSVC
+	                                // requires this to be escaped. Closing
+	                                // main group (2)
+	                         ,
+	                         std::regex::icase | std::regex::optimize);
+
 	std::string result;
 	const char *begin = str;
 	const char *last_match = str;
