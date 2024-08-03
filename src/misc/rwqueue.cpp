@@ -242,16 +242,26 @@ std::optional<T> RWQueue<T>::Dequeue()
 }
 
 template <typename T>
-bool RWQueue<T>::BulkDequeue(std::vector<T>& into_target, const size_t num_requested)
+size_t RWQueue<T>::BulkDequeue(std::vector<T>& into_target, const size_t num_requested)
 {
-	constexpr size_t min_items = 1;
-	assert(num_requested >= min_items);
-
-	if (into_target.size() != num_requested) {
+	if (into_target.size() < num_requested) {
 		into_target.resize(num_requested);
 	}
 
-	auto target_start  = into_target.begin();
+	auto num_dequeued = BulkDequeue(into_target.data(), num_requested);
+
+	// cap off the target vector to match the number that were dequeued
+	into_target.resize(num_dequeued);
+
+	return num_dequeued;
+}
+
+template <typename T>
+size_t RWQueue<T>::BulkDequeue(T* const into_target, const size_t num_requested)
+{
+	constexpr size_t min_items = 1;
+	assert(num_requested >= min_items);
+	auto target_start  = into_target;
 	auto num_remaining = num_requested;
 
 	while (num_remaining > 0) {
@@ -277,20 +287,18 @@ bool RWQueue<T>::BulkDequeue(std::vector<T>& into_target, const size_t num_reque
 
 			target_start += static_cast<difference_t>(num_items);
 			num_remaining -= num_items;
-
 		} else {
-			// If we stopped while dequeing, cap off the target
-			// vector based on the subset that were dequeued.
-			assert(num_remaining <= num_requested);
-			into_target.resize(num_requested - num_remaining);
-			num_remaining = 0;
+			// Bail out if we stopped while dequeing because more
+			// items won't be available.
+			break;
 		}
 
 		// notify the first waiting thread that the queue now has room
 		lock.unlock();
 		has_room.notify_one();
 	}
-	return !into_target.empty();
+	assert(num_remaining <= num_requested);
+	return (num_requested - num_remaining);
 }
 
 // Explicit template instantiations

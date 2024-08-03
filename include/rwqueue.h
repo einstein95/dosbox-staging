@@ -157,16 +157,25 @@ public:
 	// Returns the number of elements enqueued.
 	size_t NonblockingBulkEnqueue(std::vector<T>& from_source, const size_t num_requested);
 
-	// The target vector will be resized to accomodate, if needed. The
-	// method potentially blocks until the requested number of items have
-	// been dequeued.
-
-	// If queuing has stopped:
-	//  - Returns true when  one or more item(s) have been dequeued.
-	//  - Returns false when no items can be dequeued.
+	// Deque's the requested number of items into the given container
+	// in-bulk, and returns the quantity dequeued. This potentially blocks
+	// until the requested number of items have been dequeued. Normally all
+	// of the requested items are dequeued, however:
 	//
-	// The vector is always sized to match the number of items returned.
-	bool BulkDequeue(std::vector<T>& into_target, const size_t num_requested);
+	// - If queuing was stopped prior to bulk dequeueing then this
+	//   immediately returns with a value of 0 and no items dequeued.
+	//
+	// - If queuing was stopped in the middle of bulk dequeueing then this
+	//   immediately returns with a value indicating the subset dequeued.
+
+	// The rwqueue takes care of sizing the target vector to accomodate the
+	// number requested. On return, the vector's size matches the number
+	// dequeued.
+	size_t BulkDequeue(std::vector<T>& into_target, const size_t num_requested);
+
+	// The caller is responsible for sizing the target's array to accomodate
+	// the number requested.
+	size_t BulkDequeue(T* const into_target, const size_t num_requested);
 };
 
 #endif
