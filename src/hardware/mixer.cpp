@@ -2429,16 +2429,23 @@ static void SDLCALL mixer_callback([[maybe_unused]] void* userdata,
 	constexpr auto BytesPer32BitSample = 4;
 	constexpr auto BytesPerSampleFrame = BytesPer32BitSample * 2; // stereo
 
-	const auto frames_requested = bytes_requested / BytesPerSampleFrame;
+	const auto frames_requested = check_cast<size_t>(bytes_requested /
+	                                                 BytesPerSampleFrame);
 
-	// Mac OSX has been observed to be problematic if we ever block inside SDL's callback
-	// This ensures that we do not block waiting for more audio
-	// In the queue has run dry, we write what we have available and the rest of the request is silence
-	const auto num_frames = std::min(check_cast<int>(mixer.final_output.Size()), frames_requested);
-	if (num_frames > 0) {
-		std::vector<AudioFrame> audio_frames = {};
-		mixer.final_output.BulkDequeue(audio_frames, num_frames);
-		memcpy(stream, audio_frames.data(), audio_frames.size() * sizeof(AudioFrame));
+	LOG_INFO("SDL callback: %zd frames requested", frames_requested);
+
+	const auto frames_queued = mixer.final_output.Size();
+
+	if (frames_queued > 0) {
+		const auto frames_dequeued = mixer.final_output.BulkDequeue(
+		        reinterpret_cast<AudioFrame*>(stream),
+		        std::min(frames_requested, frames_queued));
+
+		if (frames_dequeued != frames_requested) {
+			LOG_ERR("SDL callback: Underrun! Requested %zd Got %zd",
+			        frames_requested,
+			        frames_dequeued);
+		}
 	}
 }
 
