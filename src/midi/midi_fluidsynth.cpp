@@ -904,7 +904,7 @@ std::string format_sf2_line(size_t width, const std_fs::path& sf2_path)
 	return line;
 }
 
-MIDI_RC MidiDeviceFluidSynth::ListAll(Program* caller)
+MIDI_RC MidiDeviceFluidSynth::ListDevices(Program* caller)
 {
 	const size_t term_width = INT10_GetTextColumns();
 
