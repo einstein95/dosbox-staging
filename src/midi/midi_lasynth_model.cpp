@@ -70,8 +70,8 @@ std::optional<std_fs::path> LASynthModel::FindRom(MT32Emu::Service& service,
 		if (service.identifyROMFile(&info, filename.c_str(), nullptr) !=
 		    MT32EMU_RC_OK) {
 
-			// Only log unknwon files one time (if not already in
-			// the unknown_files set).
+			// Only log unkown files one time (if not already in the
+			// unknown_files set).
 			if (unknown_files.insert(filename).second) {
 				LOG_WARNING("MT32: Unknown file in ROM folder: %s",
 				            filename.c_str());
@@ -117,7 +117,7 @@ bool LASynthModel::Load(MT32Emu::Service& service, const std_fs::path& dir) cons
 			return false;
 		}
 		const auto rcode = service.addROMFile(rom_path->string().c_str());
-		return rcode == expected_code;
+		return (rcode == expected_code);
 	};
 
 	auto load_both = [&](const Rom* rom_1,
@@ -135,7 +135,7 @@ bool LASynthModel::Load(MT32Emu::Service& service, const std_fs::path& dir) cons
 		const auto rcode = service.mergeAndAddROMFiles(
 		        rom_1_path->string().c_str(), rom_2_path->string().c_str());
 
-		return rcode == expected_code;
+		return (rcode == expected_code);
 	};
 
 	const bool loaded_pcm = load_rom(pcm_full, MT32EMU_RC_ADDED_PCM_ROM) ||
