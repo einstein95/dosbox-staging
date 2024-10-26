@@ -75,6 +75,14 @@ void device_CON::ClearAnsi()
 	ansi.numberofarg = 0;
 }
 
+enum ControlCode : uint8_t {
+	Null           = 0x0,
+	Backspace      = 0x8,
+	LineFeed       = 0xa,
+	CarriageReturn = 0xd,
+	Extended       = 0xe0,
+};
+
 bool device_CON::Read(uint8_t* data, uint16_t* size)
 {
 	uint16_t oldax = reg_ax;
@@ -89,26 +97,27 @@ bool device_CON::Read(uint8_t* data, uint16_t* size)
 	}
 	while (*size > count) {
 		reg_ah = (IS_EGAVGA_ARCH) ? 0x10 : 0x0;
+
 		CALLBACK_RunRealInt(0x16);
 		switch (reg_al) {
-		case 13:
-			data[count++] = 0x0D;
+		case ControlCode::CarriageReturn:
+			data[count++] = ControlCode::CarriageReturn;
 
 			// It's only expanded if there's room for it
 			if (*size > count) {
-				data[count++] = 0x0A;
+				data[count++] = ControlCode::LineFeed;
 			}
 			*size  = count;
 			reg_ax = oldax;
 			if (dos.echo) {
 				// Maybe don't do this (no need for it actually)
 				// (but it's compatible)
-				INT10_TeletypeOutputViaInterrupt(13, 7);
-				INT10_TeletypeOutputViaInterrupt(10, 7);
+				INT10_TeletypeOutputViaInterrupt(ControlCode::CarriageReturn, 7);
+				INT10_TeletypeOutputViaInterrupt(ControlCode::LineFeed, 7);
 			}
 			return true;
 			break;
-		case 8:
+		case ControlCode::Backspace:
 			// One char at the time so give back that BS
 			if (*size == 1) {
 				data[count++] = reg_al;
@@ -117,14 +126,14 @@ bool device_CON::Read(uint8_t* data, uint16_t* size)
 			// Remove data if it exists (extended keys don't go right)
 			else if (count) {
 				data[count--] = 0;
-				INT10_TeletypeOutputViaInterrupt(8, 7);
+				INT10_TeletypeOutputViaInterrupt(ControlCode::Backspace, 7);
 				INT10_TeletypeOutputViaInterrupt(' ', 7);
 			} else {
 				// No data read yet so restart while loop
 				continue;
 			}
 			break;
-		case 0xe0:
+		case ControlCode::Extended:
 			// Extended keys in the  int 16 0x10 case
 			if (!reg_ah) {
 				// Extended key if reg_ah isn't 0
@@ -138,7 +147,7 @@ bool device_CON::Read(uint8_t* data, uint16_t* size)
 				}
 			}
 			break;
-		case 0:
+		case ControlCode::Null:
 			// Extended keys in the int 16 0x0 case
 			data[count++] = reg_al;
 			if (*size > count) {
